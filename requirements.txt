@@ -1,2 +1,2 @@
-msldap>=0.0.2
-minikerberos>=0.0.6
+msldap>=0.0.3
+minikerberos>=0.0.7

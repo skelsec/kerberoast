@@ -4,8 +4,12 @@
 #  Tamas Jos (@skelsec)
 #
 
-from msldap.core import *
-from msldap.ldap_objects import *
+#from msldap.commons.credential import MSLDAPCredential
+#from msldap.commons.target import MSLDAPTarget
+#from msldap.connection import MSLDAPConnection
+from msldap.ldap_objects.aduser import MSADUser
+
+from msldap.commons.url import MSLDAPURLDecoder
 from msldap import logger as msldaplogger
 
 from minikerberos import logger as kerblogger
@@ -56,9 +60,9 @@ def run():
 	subparsers.required = True
 	subparsers.dest = 'command'
 
-	ldap_group = subparsers.add_parser('ldap', formatter_class=argparse.RawDescriptionHelpFormatter, help='Enumerate potentially vulnerable users via LDAP', epilog = MSLDAPCredential.help_epilog)
+	ldap_group = subparsers.add_parser('ldap', formatter_class=argparse.RawDescriptionHelpFormatter, help='Enumerate potentially vulnerable users via LDAP', epilog = MSLDAPURLDecoder.help_epilog)
 	ldap_group.add_argument('type', choices=['spn', 'asrep', 'full','custom', 'all'], help='type of vulnerable users to enumerate')
-	ldap_group.add_argument('ldap_connection_string',  help='LDAP connection specitication <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname_or_ldap_url>')
+	ldap_group.add_argument('ldap_url',  help='LDAP connection URL')
 	ldap_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	ldap_group.add_argument('-f','--filter',  help='CUSTOM mode only. LDAP search filter')
 	ldap_group.add_argument('-a','--attrs', action='append', help='FULL and CUSTOM mode only. LDAP attributes to display')
@@ -152,10 +156,9 @@ def run():
 			from winsspi.sspi import KerberoastSSPI
 		except ImportError:
 			raise Exception('winsspi module not installed!')
-			
-		creds = MSLDAPCredential.get_dummy_sspi()
-		target = MSLDAPTarget(args.dc_ip)
-		connection = MSLDAPConnection(creds, target)
+		
+		msldap_url = MSLDAPURLDecoder(args.ldap_url)
+		connection = msldap_url.get_connection()
 		connection.connect()
 		
 		adinfo = connection.get_ad_info()
@@ -180,7 +183,7 @@ def run():
 		for cred in asrep_users:			
 			ks = KerberosSocket(args.address)
 			ar = APREPRoast(ks)
-			results += ar.run(creds, override_etype = [args.etype])
+			results += ar.run([cred], override_etype = [args.etype])
 
 		for cred in spn_users:
 			spn_name = '%s@%s' % (cred.username, cred.domain)
@@ -452,12 +455,10 @@ def run():
 
 		logging.info('Kerberos user enumeration complete')
 
-	
 
 	elif args.command == 'ldap':
-		creds = MSLDAPCredential.from_connection_string(args.ldap_connection_string)
-		target = MSLDAPTarget.from_connection_string(args.ldap_connection_string)
-		connection = MSLDAPConnection(creds, target)
+		ldap_url = MSLDAPURLDecoder(args.ldap_url)
+		connection = ldap_url.get_connection()
 		connection.connect()
 		adinfo = connection.get_ad_info()
 		domain = adinfo.distinguishedName.replace('DC=','').replace(',','.')
@@ -536,12 +537,12 @@ def run():
 				with open(os.path.join(basefolder,basefile+'_ldap_custom.tsv'), 'w', newline='') as f:
 					writer = csv.writer(f, delimiter = '\t')
 					writer.writerow(args.attrs)
-					for obj in connection.pagedsearch(self, args.filter, args.attrs):
+					for obj in connection.pagedsearch(args.filter, args.attrs):
 						ctr += 1
 						writer.writerow([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs])
 
 			else:
-				for obj in connection.pagedsearch(self, args.filter, args.attrs):
+				for obj in connection.pagedsearch(args.filter, args.attrs):
 					ctr += 1
 					print('\t'.join([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs]))
 

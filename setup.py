@@ -5,7 +5,7 @@ setup(
 	name="kerberoast",
 
 	# Version number (initial):
-	version="0.0.5",
+	version="0.0.6",
 
 	# Application author details:
 	author="Tamas Jos",
@@ -34,7 +34,7 @@ setup(
 		"Operating System :: OS Independent",
 	),
 	install_requires=[
-		'msldap>=0.1.0',
+		'msldap>=0.2.3',
 		'minikerberos>=0.0.9',
 		'winsspi;platform_system=="Windows"',
 	],

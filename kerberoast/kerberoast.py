@@ -109,6 +109,8 @@ def run():
 	auto_group = subparsers.add_parser('auto', help='Just get the tickets already. Only works on windows under any domain-user context')
 	auto_group.add_argument('dc_ip', help='Target domain controller')
 	auto_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
+	auto_group.add_argument('-e','--etype', default=23, const=23, nargs='?', choices= [23, 17, 18], type=int, help = 'Set preferred encryption type')
+
 
 	args = parser.parse_args()
 
@@ -157,7 +159,8 @@ def run():
 		except ImportError:
 			raise Exception('winsspi module not installed!')
 		
-		url = 'ldap+sspi://%s' % args.dc_ip
+		domain = args.dc_ip
+		url = 'ldap+sspi://%s' % domain
 		msldap_url = MSLDAPURLDecoder(url)
 		connection = msldap_url.get_connection()
 		connection.connect()
@@ -182,7 +185,7 @@ def run():
 			spn_users.append(cred)
 			
 		for cred in asrep_users:			
-			ks = KerberosSocket(args.address)
+			ks = KerberosSocket(domain)
 			ar = APREPRoast(ks)
 			results += ar.run([cred], override_etype = [args.etype])
 

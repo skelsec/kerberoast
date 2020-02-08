@@ -157,7 +157,8 @@ def run():
 		except ImportError:
 			raise Exception('winsspi module not installed!')
 		
-		msldap_url = MSLDAPURLDecoder(args.ldap_url)
+		url = 'ldap+sspi://%s' % args.dc_ip
+		msldap_url = MSLDAPURLDecoder(url)
 		connection = msldap_url.get_connection()
 		connection.connect()
 		

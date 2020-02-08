@@ -22,6 +22,7 @@ import logging
 import getpass
 import os
 import csv
+import platform
 
 kerberoast_epilog = """==== Extra Help ====
 Dump all users from LDAP in a TSV file:
@@ -154,6 +155,9 @@ def run():
 		
 	
 	elif args.command == 'auto':
+		if platform.system() != 'Windows':
+			print('[-]This command only works on Windows!')
+			return
 		try:
 			from winsspi.sspi import KerberoastSSPI
 		except ImportError:
@@ -214,6 +218,9 @@ def run():
 		
 	
 	elif args.command == 'spnroast-sspi':
+		if platform.system() != 'Windows':
+			print('[-]This command only works on Windows!')
+			return
 		try:
 			from winsspi.sspi import KerberoastSSPI
 		except ImportError:

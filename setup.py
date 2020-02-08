@@ -1,11 +1,21 @@
 from setuptools import setup, find_packages
+import re
+
+VERSIONFILE="kerberoast/_version.py"
+verstrline = open(VERSIONFILE, "rt").read()
+VSRE = r"^__version__ = ['\"]([^'\"]*)['\"]"
+mo = re.search(VSRE, verstrline, re.M)
+if mo:
+    verstr = mo.group(1)
+else:
+    raise RuntimeError("Unable to find version string in %s." % (VERSIONFILE,))
 
 setup(
 	# Application name:
 	name="kerberoast",
 
 	# Version number (initial):
-	version="0.0.6",
+	version=verstr,
 
 	# Application author details:
 	author="Tamas Jos",
@@ -34,8 +44,8 @@ setup(
 		"Operating System :: OS Independent",
 	),
 	install_requires=[
-		'msldap>=0.2.3',
-		'minikerberos>=0.0.9',
+		'msldap>=0.2.4',
+		'minikerberos>=0.1.0',
 		'winsspi;platform_system=="Windows"',
 	],
 

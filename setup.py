@@ -45,13 +45,13 @@ setup(
 	),
 	install_requires=[
 		'msldap>=0.2.4',
-		'minikerberos>=0.1.0',
+		'minikerberos>=0.2.0',
 		'winsspi;platform_system=="Windows"',
 	],
 
 	entry_points={
 		'console_scripts': [
-			'kerberoast = kerberoast.kerberoast:run',
+			'kerberoast = kerberoast.kerberoast:main',
 		],
 	}
 )

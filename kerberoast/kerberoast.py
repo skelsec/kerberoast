@@ -5,7 +5,7 @@
 #
 
 
-from msldap.ldap_objects.aduser import MSADUser
+from msldap.ldap_objects.aduser import MSADUser, MSADUser_TSV_ATTRS
 from msldap.commons.url import MSLDAPURLDecoder
 from msldap import logger as msldaplogger
 
@@ -346,22 +346,21 @@ async def amain(args):
 		domain = args.dc_ip
 		url = 'ldap+sspi://%s' % domain
 		msldap_url = MSLDAPURLDecoder(url)
-		connection = msldap_url.get_connection()
-		connection.connect()
+		client = msldap_url.get_client()
+		await client.connect()
 		
-		adinfo = connection.get_ad_info()
-		domain = adinfo.distinguishedName.replace('DC=','').replace(',','.')
+		domain = client._ldapinfo.distinguishedName.replace('DC=','').replace(',','.')
 		spn_users = []
 		asrep_users = []
 		results = []
 		errors = []
-		for user in connection.get_all_knoreq_user_objects():
+		async for user in client.get_all_knoreq_user_objects():
 			cred = KerberosCredential()
 			cred.username = user.sAMAccountName
 			cred.domain = domain
 			
 			asrep_users.append(cred)
-		for user in connection.get_all_service_user_objects():
+		async for user in client.get_all_service_user_objects():
 			cred = KerberosCredential()
 			cred.username = user.sAMAccountName
 			cred.domain = domain
@@ -399,10 +398,10 @@ async def amain(args):
 		
 	elif args.command == 'ldap':
 		ldap_url = MSLDAPURLDecoder(args.ldap_url)
-		connection = ldap_url.get_connection()
-		connection.connect()
-		adinfo = connection.get_ad_info()
-		domain = adinfo.distinguishedName.replace('DC=','').replace(',','.')
+		client = ldap_url.get_client()
+		await client.connect()
+
+		domain = client._ldapinfo.distinguishedName.replace('DC=','').replace(',','.')
 
 		if args.out_file:
 			basefolder = ntpath.dirname(args.out_file)
@@ -413,13 +412,13 @@ async def amain(args):
 			cnt = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_spn_users.txt'), 'w', newline='') as f:
-					for user in connection.get_all_service_user_objects():
+					async for user in client.get_all_service_user_objects():
 						cnt += 1
 						f.write('%s@%s\r\n' % (user.sAMAccountName, domain))
 			
 			else:
 				print('[+] SPN users')
-				for user in connection.get_all_service_user_objects():
+				async for user in client.get_all_service_user_objects():
 					cnt += 1
 					print('%s@%s' % (user.sAMAccountName, domain))
 			
@@ -430,12 +429,12 @@ async def amain(args):
 			ctr = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_asrep_users.txt'), 'w', newline='') as f:
-					for user in connection.get_all_knoreq_user_objects():
+					async for user in client.get_all_knoreq_user_objects():
 						ctr += 1
 						f.write('%s@%s\r\n' % (user.sAMAccountName, domain))
 			else:
 				print('[+] ASREP users')
-				for user in connection.get_all_knoreq_user_objects():
+				async for user in client.get_all_knoreq_user_objects():
 					ctr += 1
 					print('%s@%s' % (user.sAMAccountName, domain))
 
@@ -444,12 +443,12 @@ async def amain(args):
 		if args.type in ['full', 'all']:
 			logging.debug('Enumerating ALL user accounts, this will take some time depending on the size of the domain')
 			ctr = 0
-			attrs = args.attrs if args.attrs is not None else MSADUser.TSV_ATTRS
+			attrs = args.attrs if args.attrs is not None else MSADUser_TSV_ATTRS
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_ldap_users.tsv'), 'w', newline='', encoding ='utf8') as f:
 					writer = csv.writer(f, delimiter = '\t')
 					writer.writerow(attrs)
-					for user in connection.get_all_user_objects():
+					async for user in client.get_all_user_objects():
 						ctr += 1
 						writer.writerow(user.get_row(attrs))
 
@@ -457,7 +456,7 @@ async def amain(args):
 				logging.debug('Are you sure about this?')
 				print('[+] Full user dump')
 				print('\t'.join(attrs))
-				for user in connection.get_all_user_objects():
+				async for user in client.get_all_user_objects():
 					ctr += 1
 					print('\t'.join([str(x) for x in user.get_row(attrs)]))
 
@@ -478,12 +477,12 @@ async def amain(args):
 				with open(os.path.join(basefolder,basefile+'_ldap_custom.tsv'), 'w', newline='') as f:
 					writer = csv.writer(f, delimiter = '\t')
 					writer.writerow(args.attrs)
-					for obj in connection.pagedsearch(args.filter, args.attrs):
+					async for obj in client.pagedsearch(args.filter, args.attrs):
 						ctr += 1
 						writer.writerow([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs])
 
 			else:
-				for obj in connection.pagedsearch(args.filter, args.attrs):
+				async for obj in client.pagedsearch(args.filter, args.attrs):
 					ctr += 1
 					print('\t'.join([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs]))
 

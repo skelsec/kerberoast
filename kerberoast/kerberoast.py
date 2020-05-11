@@ -363,20 +363,26 @@ async def amain(args):
 		url = 'ldap+sspi-ntlm://%s' % domain
 		msldap_url = MSLDAPURLDecoder(url)
 		client = msldap_url.get_client()
-		await client.connect()
-		
+		_, err = await client.connect()
+		if err is not None:
+			raise err
+
 		domain = client._ldapinfo.distinguishedName.replace('DC=','').replace(',','.')
 		spn_users = []
 		asrep_users = []
 		results = []
 		errors = []
-		async for user in client.get_all_knoreq_user_objects():
+		async for user, err in client.get_all_knoreq_users():
+			if err is not None:
+				raise err
 			cred = KerberosCredential()
 			cred.username = user.sAMAccountName
 			cred.domain = domain
 			
 			asrep_users.append(cred)
-		async for user in client.get_all_service_user_objects():
+		async for user, err in client.get_all_service_users():
+			if err is not None:
+				raise err
 			cred = KerberosCredential()
 			cred.username = user.sAMAccountName
 			cred.domain = domain
@@ -415,7 +421,9 @@ async def amain(args):
 	elif args.command == 'ldap':
 		ldap_url = MSLDAPURLDecoder(args.ldap_url)
 		client = ldap_url.get_client()
-		await client.connect()
+		_, err = await client.connect()
+		if err is not None:
+			raise err
 
 		domain = client._ldapinfo.distinguishedName.replace('DC=','').replace(',','.')
 
@@ -428,13 +436,15 @@ async def amain(args):
 			cnt = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_spn_users.txt'), 'w', newline='') as f:
-					async for user in client.get_all_service_user_objects():
+					async for user in client.get_all_service_users():
 						cnt += 1
 						f.write('%s@%s\r\n' % (user.sAMAccountName, domain))
 			
 			else:
 				print('[+] SPN users')
-				async for user in client.get_all_service_user_objects():
+				async for user, err in client.get_all_service_users():
+					if err is not None:
+						raise err
 					cnt += 1
 					print('%s@%s' % (user.sAMAccountName, domain))
 			
@@ -445,12 +455,16 @@ async def amain(args):
 			ctr = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_asrep_users.txt'), 'w', newline='') as f:
-					async for user in client.get_all_knoreq_user_objects():
+					async for user, err in client.get_all_knoreq_users():
+						if err is not None:
+							raise err
 						ctr += 1
 						f.write('%s@%s\r\n' % (user.sAMAccountName, domain))
 			else:
 				print('[+] ASREP users')
-				async for user in client.get_all_knoreq_user_objects():
+				async for user, err in client.get_all_knoreq_users():
+					if err is not None:
+						raise err
 					ctr += 1
 					print('%s@%s' % (user.sAMAccountName, domain))
 
@@ -464,7 +478,9 @@ async def amain(args):
 				with open(os.path.join(basefolder,basefile+'_ldap_users.tsv'), 'w', newline='', encoding ='utf8') as f:
 					writer = csv.writer(f, delimiter = '\t')
 					writer.writerow(attrs)
-					async for user in client.get_all_user_objects():
+					async for user, err in client.get_all_users():
+						if err is not None:
+							raise err
 						ctr += 1
 						writer.writerow(user.get_row(attrs))
 
@@ -472,7 +488,9 @@ async def amain(args):
 				logging.debug('Are you sure about this?')
 				print('[+] Full user dump')
 				print('\t'.join(attrs))
-				async for user in client.get_all_user_objects():
+				async for user, err in client.get_all_users():
+					if err is not None:
+						raise err
 					ctr += 1
 					print('\t'.join([str(x) for x in user.get_row(attrs)]))
 
@@ -493,12 +511,16 @@ async def amain(args):
 				with open(os.path.join(basefolder,basefile+'_ldap_custom.tsv'), 'w', newline='') as f:
 					writer = csv.writer(f, delimiter = '\t')
 					writer.writerow(args.attrs)
-					async for obj in client.pagedsearch(args.filter, args.attrs):
+					async for obj, err in client.pagedsearch(args.filter, args.attrs):
+						if err is not None:
+							raise err
 						ctr += 1
 						writer.writerow([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs])
 
 			else:
-				async for obj in client.pagedsearch(args.filter, args.attrs):
+				async for obj, err in client.pagedsearch(args.filter, args.attrs):
+					if err is not None:
+						raise err
 					ctr += 1
 					print('\t'.join([str(obj['attributes'].get(x, 'N/A')) for x in args.attrs]))
 

@@ -44,7 +44,7 @@ setup(
 		"Operating System :: OS Independent",
 	),
 	install_requires=[
-		'msldap>=0.2.8',
+		'msldap>=0.3.1',
 		'minikerberos>=0.2.0',
 		'winsspi;platform_system=="Windows"',
 	],

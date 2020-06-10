@@ -47,6 +47,7 @@ setup(
 		'msldap>=0.3.1',
 		'minikerberos>=0.2.0',
 		'winsspi;platform_system=="Windows"',
+		'winacl>=0.0.4; platform_system=="Windows"',
 	],
 
 	entry_points={

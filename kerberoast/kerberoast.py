@@ -31,6 +31,7 @@ import sys
 from urllib.parse import urlparse, parse_qs
 import datetime
 
+
 kerberoast_epilog = """==== Extra Help ====
 Dump all users from LDAP in a TSV file:
    - kerberoast ldap full 'ldap://TEST\\victim:Passw0rd!1@10.10.10.2' -o users

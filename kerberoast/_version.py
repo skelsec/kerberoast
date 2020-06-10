@@ -1,7 +1,7 @@
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __banner__ = \
 """
-# minikerberos %s 
+# kerberoast %s 
 # Author: Tamas Jos @skelsec (skelsecprojects@gmail.com)
 """ % __version__

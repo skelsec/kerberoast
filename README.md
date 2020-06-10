@@ -1,6 +1,8 @@
 # kerberoast
 Kerberos attack toolkit -pure python-
 
+![kerbi_logo_big](https://user-images.githubusercontent.com/19204702/84300988-eb5bbc80-ab07-11ea-93c1-35853203d7bf.png)
+
 ### Install
 ```pip3 install kerberoast```   
 

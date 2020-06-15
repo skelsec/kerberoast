@@ -196,7 +196,7 @@ async def run_auto():
 		
 		logon = get_logon_info()
 		domain = logon['domain']
-		url = 'ldap+sspi-ntlm://%s' % logon['logoserver']
+		url = 'ldap+sspi-ntlm://%s' % logon['logonserver']
 		msldap_url = MSLDAPURLDecoder(url)
 		client = msldap_url.get_client()
 		_, err = await client.connect()

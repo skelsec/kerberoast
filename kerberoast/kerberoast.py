@@ -207,6 +207,7 @@ async def run_auto():
 		spn_users = []
 		asrep_users = []
 		errors = []
+		results = []
 		spn_cnt = 0
 		asrep_cnt = 0
 		async for user, err in client.get_all_knoreq_users():

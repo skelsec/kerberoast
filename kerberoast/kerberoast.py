@@ -232,7 +232,7 @@ async def run_auto():
 			ks = KerberosTarget(domain)
 			ar = APREPRoast(ks)
 			res = await ar.run(cred, override_etype = [23])
-			results.append(res)	
+			results.append(str(res))	
 			
 		filename = 'asreproast_%s_%s.txt' % (logon['domain'], datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
 		with open(filename, 'w', newline = '') as f:
@@ -318,7 +318,7 @@ async def amain(args):
 		hashes = []
 		for target in targets:
 			h = await ar.run(target, override_etype = [args.etype])
-			hashes.append(h)
+			hashes.append(str(h))
 
 		if args.out_file:
 			with open(args.out_file, 'w', newline = '') as f:

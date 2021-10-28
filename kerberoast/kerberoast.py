@@ -390,7 +390,7 @@ async def amain(args):
 				if result is True:
 					if args.out_file:
 						with open(args.out_file, 'a') as f:
-							f.write(result + '\r\n')
+							f.write(str(spn) + '\r\n')
 					else:
 						print('[+] Enumerated user: %s' % str(spn))
 

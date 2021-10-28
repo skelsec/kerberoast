@@ -463,7 +463,9 @@ async def amain(args):
 			cnt = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_spn_users.txt'), 'w', newline='') as f:
-					async for user in client.get_all_service_users():
+					async for user, err in client.get_all_service_users():
+						if err is not None:
+							raise err
 						cnt += 1
 						f.write('%s@%s\r\n' % (user.sAMAccountName, domain))
 			

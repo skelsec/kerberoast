@@ -42,7 +42,7 @@ List all kerberoastable users:
 List all asreproastable users users: 
    - kerberoast ldap asrep 'ldap://TEST\\victim:Passw0rd!1@10.10.10.2'
 
-Brute-force guss of usernames via kerberos:
+Brute-force guess of usernames via kerberos:
 	(username_dict.txt is a list of usernames (without domain) one username per line)
    - kerberoast brute TEST.corp 10.10.10.2 username_dict.txt
    
@@ -606,7 +606,7 @@ def main():
 	spnroastsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	spnroastsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 	
-	multiplexorsspi_group = subparsers.add_parser('spnroast-multiplexor', help='')
+	multiplexorsspi_group = subparsers.add_parser('spnroast-multiplexor', help='Perform spn roasting (aka kerberoasting) ')
 	multiplexorsspi_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
 	multiplexorsspi_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
 	multiplexorsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')

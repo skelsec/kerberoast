@@ -600,7 +600,7 @@ def main():
 	spnroast_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 	spnroast_group.add_argument('-e','--etype', default=-1, const=-1, nargs='?', choices= [23, 17, 18, -1], type=int, help = 'Set preferred encryption type. -1 for all')
 
-	spnroastsspi_group = subparsers.add_parser('spnroast-sspi', help='Perform spn roasting (aka kerberoasting)')
+	spnroastsspi_group = subparsers.add_parser('spnroast-sspi', help='Perform spn roasting (aka kerberoasting). Only works on Windows')
 	spnroastsspi_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
 	spnroastsspi_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
 	spnroastsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')

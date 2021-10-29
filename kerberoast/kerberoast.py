@@ -619,9 +619,9 @@ def main():
 	tgt_group.add_argument('kerberos_connection_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
 	tgt_group.add_argument('out_file',  help='Output CCACHE file')
 	
-	tgs_group = subparsers.add_parser('tgs', help='Fetches a TGT for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberos_url_help_epilog)
+	tgs_group = subparsers.add_parser('tgs', help='Fetches a TGS for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberos_url_help_epilog)
 	tgs_group.add_argument('kerberos_connection_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
-	tgs_group.add_argument('spn',  help='SPN strong of the service to get TGS for. Expected format: <domain>/<hostname>')
+	tgs_group.add_argument('spn',  help='SPN of the service to get TGS for. Expected format: <spn>@<domain>')
 	tgs_group.add_argument('out_file',  help='Output CCACHE file')
 	
 

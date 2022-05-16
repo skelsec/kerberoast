@@ -45,9 +45,9 @@ setup(
 	),
 	install_requires=[
 		'msldap>=0.3.1',
-		'minikerberos>=0.2.3',
+		'minikerberos>=0.2.10',
 		'winsspi;platform_system=="Windows"',
-		'winacl>=0.0.6; platform_system=="Windows"',
+		'winacl>=0.1.1; platform_system=="Windows"',
 	],
 
 	entry_points={

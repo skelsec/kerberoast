@@ -44,10 +44,10 @@ setup(
 		"Operating System :: OS Independent",
 	),
 	install_requires=[
-		'msldap>=0.3.1',
-		'minikerberos>=0.2.10',
+		'msldap>=0.4.1',
+		'minikerberos>=0.3.1',
 		'winsspi;platform_system=="Windows"',
-		'winacl>=0.1.1; platform_system=="Windows"',
+		'winacl>=0.1.5; platform_system=="Windows"',
 	],
 
 	entry_points={

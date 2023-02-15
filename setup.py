@@ -44,15 +44,15 @@ setup(
 		"Operating System :: OS Independent",
 	),
 	install_requires=[
-		'msldap>=0.4.1',
-		'minikerberos>=0.3.1',
+		'msldap>=0.4.7',
+		'minikerberos>=0.4.0',
 		'winsspi;platform_system=="Windows"',
-		'winacl>=0.1.5; platform_system=="Windows"',
+		'winacl>=0.1.6; platform_system=="Windows"',
 	],
 
 	entry_points={
 		'console_scripts': [
-			'kerberoast = kerberoast.kerberoast:main',
+			'kerberoast = kerberoast.__main__:main',
 		],
 	}
 )

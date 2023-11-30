@@ -179,7 +179,7 @@ async def run_auto():
 		for cred in spn_users:
 			try:
 				spn_name = '%s@%s' % (cred.username, cred.domain)
-				if spn_name[:6] == 'krbtgt':
+				if spn_name.lower().find('krbtgt') != -1:
 					continue
 				ksspi = KerberoastSSPI()
 				try:

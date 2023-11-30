@@ -1,3 +1,9 @@
+![Supported Python versions](https://img.shields.io/badge/python-3.7+-blue.svg) [![Twitter](https://img.shields.io/twitter/follow/skelsec?label=skelsec&style=social)](https://twitter.com/intent/follow?screen_name=skelsec)
+
+## :triangular_flag_on_post: Sponsors
+
+If you like this project, consider sponsoring it on GitHub! [Sponsors](https://github.com/sponsors/skelsec/)
+
 # kerberoast
 Kerberos attack toolkit -pure python-
 ![kerbe_card](https://user-images.githubusercontent.com/19204702/84308376-43e48700-ab13-11ea-94f2-27d2badb8540.jpg)
